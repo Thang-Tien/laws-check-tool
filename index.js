@@ -1,41 +1,50 @@
 const { Builder, By, until, Browser, Capabilities } = require("selenium-webdriver")
 const xlsxToJson = require('./xlsx')
-const fs = require('fs');
+const fs = require('fs/promises');
 const { Options } = require("selenium-webdriver/edge");
+const utils = require('./utils');
+const dotenv = require('dotenv');
+
+// config env
+dotenv.config({ path: ".env" });
 
 // load data
 var laws = xlsxToJson('./DanhSach_VB_BPĐ.xlsx');
-var cookies = xlsxToJson('./thuvienphapluat.vn_21-03-2024.json');
 
-// Set Edge driver capabilities
 const capabilities = Capabilities.edge();
 
-// Set the desired page load strategy
-capabilities.setPageLoadStrategy('eager'); // or 'none
-let driver = new Builder().forBrowser(Browser.CHROME).withCapabilities(capabilities).build();
-
-
+// Không nên để eager vì tốc độ quá nhanh, web sẽ nhận diện là bot
+capabilities.setPageLoadStrategy('normal');
+let driver = new Builder().forBrowser(Browser.EDGE).withCapabilities(capabilities).build();
 
 //access the website
 driver.get('https://thuvienphapluat.vn/');
 
 // login
-driver.findElement(By.id("usernameTextBox")).sendKeys("kiemtravb");
-driver.findElement(By.id("passwordTextBox")).sendKeys("cuckiemtra");
+driver.findElement(By.id("usernameTextBox")).sendKeys(`${process.env.USER_NAME}`);
+driver.findElement(By.id("passwordTextBox")).sendKeys(`${process.env.PASSWORD}`);
 // await driver.findElement(By.id("usernameTextBox")).sendKeys("cao.hl.thang@gmail.com")
 // await driver.findElement(By.id("passwordTextBox")).sendKeys("12345678")
 driver.findElement(By.id("loginButton")).click();
 
 driver.wait(until.elementLocated(By.id('Support_HyperLink1')))
     .then(async () => {
-        for (let i = 0; i < 1000; i++) {
+        for (let i = 0; i < laws.length; i++) {
+            var startTime = performance.now();
             var result = await find(laws[i]['Số hiệu VB, Ngày ban hành']);
             laws[i]['Màu'] = result[0];
-            laws[i][' Văn bản thay thế hoặc sđ, bs'] = result[1];
-            console.log(i, result[0], result[1]);
+            //laws[i][' Văn bản thay thế hoặc sđ, bs'] = result[1];
+            laws[i] = utils.specialAddAttribute(laws[i], {" Văn bản thay thế hoặc sđ, bs": result[1]}, 2);
+            await utils.sleep(1000);
+
+            console.log(i + 2, result[0], result[1]);
+            var endTime = performance.now();
+            var executionTime = endTime - startTime;
+            console.log(`Execution takes ${utils.msToTime(executionTime)}, time remaining: ${utils.msToTime(executionTime * (laws.length - i))} \n`);
+            await fs.appendFile('./laws.json', `${JSON.stringify(laws[i])}, `, 'utf-8');
         }
 
-        fs.writeFileSync('./laws.json', JSON.stringify(laws.slice(0, 1000)), 'utf-8');
+        await fs.appendFile('./laws.json', `]`, 'utf-8');
 
     });
 
@@ -58,7 +67,10 @@ async function find(keyword) {
 
         // Check document code
         var currentDocumentCode = await driver.findElement(By.css('#viewingDocument > div:nth-child(2) > div.ds.fl')).getText();
-        if (currentDocumentCode != keyword.split(' ')[1]) {
+        currentDocumentCode = currentDocumentCode.replaceAll('-', '/');
+        var keywordCode = keyword.split(' ')[1].replaceAll('-', '/');
+
+        if (currentDocumentCode != keywordCode) {
             return ['red', 'Không tồn tại'];
         }
 
@@ -92,7 +104,6 @@ async function find(keyword) {
                 const [replaceDocumentCode, newestEffectiveDate] = await checkDocument('replace');
                 //console.log('Bôi vàng', replaceDocumentCode, newestEffectiveDate);
                 return ['yellow', replaceDocumentCode];
-
             }
             // Không có -> Nhập 'Không có vbtt'
             else {
@@ -105,8 +116,11 @@ async function find(keyword) {
         } else if (condition.includes('Chưa có hiệu lực pháp luật')) {
             //console.log('Chưa có hiệu lực pháp luật');
             return ['white', 'Chưa có hiệu lực pháp luật'];
+        } else if (condition.includes('Không xác định')) {
+            return ['red', 'Chưa có hiệu lực pháp luật'];
+        } else {
+            return ['red', '']
         }
-        return ['white', ''];
     } catch (e) {
         //console.log("Error: ", e);
         return ['white', ''];
@@ -131,7 +145,6 @@ async function checkDocument(type) {
             effectiveDateString = effectiveDateString.trim();
             //console.log(effectiveDateString);
             effectiveDate = new Date(parseInt(effectiveDateString.split('/')[2]), parseInt(effectiveDateString.split('/')[1]) - 1, parseInt(effectiveDateString.split('/')[0]), 7);
-            console.log(effectiveDate)
             if (effectiveDate > newestEffectiveDate) {
                 additionalDocumentCode = await driver.executeScript(`return document.querySelector('#amendDocument > div > div.dgc:nth-child(${i + 1}) > div:nth-child(2) > div > div > div:nth-child(2) > div:nth-child(2)').textContent;`);
                 additionalDocumentCode = additionalDocumentCode.trim();
